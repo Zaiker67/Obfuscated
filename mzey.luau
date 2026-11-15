@@ -1877,6 +1877,271 @@ end)
 
 tabs.boss:AddLabel("~~~~~~~~~~")
 
+tabs.boss:AddLabel("Alien Boss Farming:")
+tabs.boss.Alien = {
+	runtime = {},
+	BossLabelPrefix = "Alien Boss: ",
+	StatusLabel = tabs.boss:AddLabel("Status: Waiting for Alien Boss"),
+	BossLabel = tabs.boss:AddLabel("Alien Boss: None"),
+	HealthLabel = tabs.boss:AddLabel("Health: 0 / 0"),
+	NextBossLabel = tabs.boss:AddLabel("Next Alien Boss: Waiting for spawn"),
+	Data = {
+		Running = false,
+		Generation = 0,
+		Phase = "Waiting",
+		PunchInterval = 0.3,
+		LastPunch = 0,
+		AttackSequence = nil,
+		EvadeUntil = 0,
+		EvadeDistance = 230,
+		PunchBehindDistance = 45,
+		StompHealthThreshold = 0.35,
+		DodgeStomps = false,
+		Bosses = {
+			Alien = "Alien",
+			AlienBoss = "Alien",
+			SpaceAlien = "Alien"
+		},
+		BossOrder = {"Alien"},
+		BossByDisplayName = {},
+		SelectedBosses = {},
+		Target = nil
+	}
+}
+
+formatCurrentStat = formatCurrentStat or function(v) return tostring(v) end
+
+tabs.boss.Alien.SelectedBossesLabel = tabs.boss:AddLabel("Targeted Alien Bosses: All")
+tabs.boss.Alien.updateSelectedBossesLabel = function(selectedNames)
+	selectedNames = {}
+	for _, bossId in ipairs(tabs.boss.Alien.Data.BossOrder) do
+		if tabs.boss.Alien.Data.SelectedBosses[bossId] then
+			table.insert(selectedNames, tabs.boss.Alien.Data.Bosses[bossId])
+		end
+	end
+	tabs.boss.Alien.SelectedBossesLabel.Text = "Targeted Alien Bosses: "
+		.. (#selectedNames > 0 and table.concat(selectedNames, ", ") or "None")
+end
+
+tabs.boss.Alien.BossDropdown = tabs.boss:AddDropdown("Target specific Alien Bosses", function(displayName, bossId)
+	bossId = tabs.boss.Alien.Data.BossByDisplayName[displayName]
+	if not bossId then return end
+	tabs.boss.Alien.Data.SelectedBosses[bossId] = not tabs.boss.Alien.Data.SelectedBosses[bossId]
+	tabs.boss.Alien.updateSelectedBossesLabel()
+end)
+
+for _, bossId in ipairs(tabs.boss.Alien.Data.BossOrder) do
+	tabs.boss.Alien.Data.BossByDisplayName[tabs.boss.Alien.Data.Bosses[bossId]] = bossId
+	tabs.boss.Alien.Data.SelectedBosses[bossId] = true
+	tabs.boss.Alien.BossDropdown:Add(tabs.boss.Alien.Data.Bosses[bossId])
+end
+tabs.boss.Alien.updateSelectedBossesLabel()
+
+tabs.boss.Alien.shouldFarmBoss = function(model)
+	local bossId = model:GetAttribute("BossId") or model.Name
+	if tabs.boss.Alien.Data.SelectedBosses[bossId] == true then return true end
+	if string.find(string.lower(model.Name), "alien") then return true end
+	return false
+end
+
+-- Function para sa pag-detect at pag-kolekta ng chest pagkatapos mapatay ang boss
+tabs.boss.Alien.collectNearbyChests = function()
+	pcall(function()
+		for _, obj in ipairs(game:GetDescendants()) do
+			if obj:IsA("Model") or obj:IsA("BasePart") then
+				local name = string.lower(obj.Name)
+				if string.find(name, "chest") or string.find(name, "reward") or string.find(name, "loot") then
+					local prompt = obj:FindFirstChildOfClass("ProximityPrompt")
+					local touchPart = obj:IsA("BasePart") and obj or obj:FindFirstChild("TouchInterest") and obj:FindFirstChildOfClass("BasePart") or obj.PrimaryPart
+					
+					if prompt then
+						local char = game.Players.LocalPlayer and game.Players.LocalPlayer.Character
+						local root = char and char:FindFirstChild("HumanoidRootPart")
+						if root and touchPart then
+							root.CFrame = touchPart.CFrame + Vector3.new(0, 3, 0)
+							task.wait(0.2)
+							fireproximityprompt(prompt)
+						end
+					elseif touchPart then
+						local char = game.Players.LocalPlayer and game.Players.LocalPlayer.Character
+						local root = char and char:FindFirstChild("HumanoidRootPart")
+						if root then
+							root.CFrame = touchPart.CFrame + Vector3.new(0, 3, 0)
+						end
+					end
+				end
+			end
+		end
+	end)
+end
+
+-- Direktang attack function para masigurong umatake ito sa boss
+tabs.boss.Alien.attackBossDirectly = function(model, hitbox)
+	local player = game.Players.LocalPlayer
+	local character = player and player.Character
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	
+	if not root or not hitbox then return end
+	
+	-- Lumapit sa boss (sa likod o harapan ng hitbox nito)
+	local targetPos = hitbox.Position - (root.CFrame.LookVector * 2)
+	root.CFrame = CFrame.new(targetPos, hitbox.Position)
+	
+	-- I-activate ang Tool o gamitin ang Combat Remote kung meron man
+	local backpack = player:FindFirstChild("Backpack")
+	local tool = character:FindFirstChildOfClass("Tool") or (backpack and backpack:FindFirstChildOfClass("Tool"))
+	
+	if tool then
+		if tool.Parent == backpack then
+			tool.Parent = character
+		end
+		tool:Activate()
+	else
+		-- Fallback sa pag-trigger ng RemoteEvent kung mayroon sa ReplicatedStorage
+		pcall(function()
+			local remotes = game:GetService("ReplicatedStorage"):FindFirstChild("Remotes") or game:GetService("ReplicatedStorage"):FindFirstChild("Events")
+			if remotes then
+				for _, remote in ipairs(remotes:GetChildren()) do
+					if remote:IsA("RemoteEvent") and (string.find(string.lower(remote.Name), "attack") or string.find(string.lower(remote.Name), "punch") or string.find(string.lower(remote.Name), "combat")) then
+						remote:FireServer(model)
+					end
+				end
+			end
+		end)
+	end
+end
+
+tabs.boss.Alien.findActiveBoss = function(selectedOnly)
+	local closestDistance = math.huge
+	local bestModel, bestHitbox
+	
+	local candidates = {}
+	pcall(function()
+		for _, v in ipairs(game:GetService("CollectionService"):GetTagged("AlienBoss")) do
+			table.insert(candidates, v)
+		end
+		for _, v in ipairs(game:GetService("CollectionService"):GetTagged("Alien")) do
+			table.insert(candidates, v)
+		end
+	end)
+	
+	if #candidates == 0 then
+		for _, child in ipairs(game.Workspace:GetChildren()) do
+			if child:IsA("Model") and string.find(string.lower(child.Name), "alien") then
+				table.insert(candidates, child)
+			end
+		end
+	end
+
+	for _, candidate in ipairs(candidates) do
+		if candidate:IsA("Model") and candidate:IsDescendantOf(game.Workspace) then
+			local health = tabs.boss.Alien.getBossHealth(nil, candidate)
+			if health > 0 and (not selectedOnly or tabs.boss.Alien.shouldFarmBoss(candidate)) then
+				local candidateHitbox = candidate:FindFirstChild("BossDamageHitbox", true)
+					or candidate:FindFirstChildOfClass("Humanoid") and candidate.PrimaryPart
+					or candidate:FindFirstChild("HumanoidRootPart") or candidate.PrimaryPart
+				
+				if candidateHitbox and candidateHitbox:IsA("BasePart") then
+					local char = game.Players.LocalPlayer and game.Players.LocalPlayer.Character
+					local root = char and char:FindFirstChild("HumanoidRootPart")
+					local distance = root and (root.Position - candidateHitbox.Position).Magnitude or 0
+					if not bestModel or distance < closestDistance then
+						bestModel, bestHitbox, closestDistance = candidate, candidateHitbox, distance
+					end
+				end
+			end
+		end
+	end
+	return bestModel, nil, nil, bestHitbox
+end
+
+runtime = runtime or {
+	Spawn = function(_, func) task.spawn(func) end
+}
+
+runtime:Spawn(function()
+	while true do
+		local model = tabs.boss.Alien.Data.Target
+		if not model or not model.Parent or tabs.boss.Alien.getBossHealth(nil, model) <= 0 then
+			model = tabs.boss.Alien.findActiveBoss(false)
+		end
+		if model then
+			tabs.boss.Alien.BossLabel.Text = "Alien Boss: " .. tabs.boss.Alien.getBossDisplayName(model)
+			tabs.boss.Alien.HealthLabel.Text = "Health: " .. formatCurrentStat(tabs.boss.Alien.getBossHealth(nil, model))
+				.. " / " .. formatCurrentStat(tabs.boss.Alien.getBossMaxHealth(nil, model))
+			tabs.boss.Alien.NextBossLabel.Text = "Next Alien Boss: Current boss active"
+		else
+			tabs.boss.Alien.BossLabel.Text = "Alien Boss: None"
+			tabs.boss.Alien.HealthLabel.Text = "Health: 0 / 0"
+			tabs.boss.Alien.NextBossLabel.Text = "Next Alien Boss: Waiting for spawn"
+		end
+		task.wait(0.25)
+	end
+end)
+
+tabs.boss.Alien.AutoFarmSwitch = tabs.boss:AddSwitch("Auto Farm Alien Boss", function(state)
+	if state and tabs.boss.Data and tabs.boss.Data.Running then tabs.boss.AutoFarmSwitch:Set(false) end
+	tabs.boss.Alien.Data.Running = state
+	tabs.boss.Alien.Data.Generation += 1
+	if not state then
+		tabs.boss.Alien.Data.Preparation = nil
+		tabs.boss.Alien.Data.Target = nil
+		tabs.boss.Alien.Data.Phase = "Waiting"
+		tabs.boss.Alien.StatusLabel.Text = "Status: Disabled"
+		if tabs.boss.resumeTraining then tabs.boss.resumeTraining() end
+		return
+	end
+
+	runtime:Spawn(function(generation)
+		local wasFighting = false
+		while tabs.boss.Alien.Data.Running and tabs.boss.Alien.Data.Generation == generation do
+			local success, err = pcall(function()
+				local model, _, _, hitbox = tabs.boss.Alien.findActiveBoss(true)
+				local health = model and tabs.boss.Alien.getBossHealth(nil, model) or 0
+				local maxHealth = model and tabs.boss.Alien.getBossMaxHealth(nil, model) or 100
+
+				if model and health > 0 then
+					wasFighting = true
+					if tabs.boss.Alien.Data.Target ~= model then
+						tabs.boss.Alien.Data.Target = model
+					end
+					tabs.boss.Alien.Data.Phase = "Fighting"
+					
+					local char = game.Players.LocalPlayer and game.Players.LocalPlayer.Character
+					local hum = char and char:FindFirstChildOfClass("Humanoid")
+					if hum and hum.Health > 0 then
+						tabs.boss.Alien.StatusLabel.Text = "Status: Fighting"
+						
+						-- Gagamitin ang sarili nating direct attack function
+						if tabs.boss.attack then
+							tabs.boss.attack(tabs.boss.Alien, model, health, maxHealth, hitbox)
+						else
+							tabs.boss.Alien.attackBossDirectly(model, hitbox)
+						end
+					else
+						tabs.boss.Alien.StatusLabel.Text = "Status: Waiting for Respawn"
+					end
+				else
+					if wasFighting then
+						tabs.boss.Alien.StatusLabel.Text = "Status: Boss Defeated! Collecting Chest..."
+						tabs.boss.Alien.collectNearbyChests()
+						task.wait(1)
+					end
+
+					tabs.boss.Alien.Data.Target = nil
+					tabs.boss.Alien.Data.Phase = "Waiting"
+					wasFighting = false
+					tabs.boss.Alien.StatusLabel.Text = "Status: Waiting for Alien Boss"
+				end
+			end)
+			if not success then
+				warn("[AlienDebug Loop Error]:", err)
+			end
+			task.wait(model and 0.03 or 0.25)
+		end
+	end, tabs.boss.Alien.Data.Generation)
+end)
+
 tabs.boss:AddLabel("Boss Killing V2")
 
 tabs.boss:AddButton("Auto Boss V2", function()
