@@ -2186,7 +2186,11 @@ tabs.boss.Alien.AutoFarmSwitch = tabs.boss:AddSwitch("Auto Farm Alien Boss", fun
 	end)
 end)
 
-tabs.boss:AddLabel("")
+tabs.boss:AddButton("Auto Sell Useless Alien Boss Rewards", function()
+    loadstring(game:HttpGet("https://raw.githubusercontent.com/Script-ZenthonLee/AutoSellMSL/refs/heads/main/SellUnwantedPets.lua"))()
+end)
+
+tabs.boss:AddLabel("~~~~~~~~~~")
 
 tabs.boss:AddLabel("Boss Killing V2")
 
