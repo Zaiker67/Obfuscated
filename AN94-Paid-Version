@@ -314,6 +314,18 @@ local PETS = {
         durability = 0,
         rebirth = 0,
     },
+	["Hades Ember"] = {
+		repSpeed = 10,
+		strength = 0,
+		durability = 0,
+		rebirth = 0,
+	},
+	["Poseidon Tide"] = {
+		repSpeed = 10,
+		strength = 0,
+		durability = 0,
+		rebirth = 0,
+	},
 }
 
 local MAX_PET_SLOTS = 12
